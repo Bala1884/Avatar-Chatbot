@@ -215,7 +215,7 @@ export default function Player_lipsync({ isSpeaking, isIdle, audio, lipsync }) {
   
 
   return (
-    <group ref={group} dispose={null} position={[7,3,-1]} scale={[4,4,4]} rotation={[0,0,-30]} >
+    <group ref={group} dispose={null} position={[7,3,-1]} scale={[4.5,4.5,4.5]} rotation={[0,0,-30]} >
       <primitive object={nodes.Hips} />
       <skinnedMesh geometry={nodes.Wolf3D_Hair.geometry} material={materials.Wolf3D_Hair} skeleton={nodes.Wolf3D_Hair.skeleton} />
       <skinnedMesh geometry={nodes.Wolf3D_Body.geometry} material={materials.Wolf3D_Body} skeleton={nodes.Wolf3D_Body.skeleton} />
