@@ -6,13 +6,20 @@ from fastapi.responses import FileResponse
 import pyttsx3
 from fastapi.middleware.cors import CORSMiddleware
 import re
+from dotenv import load_dotenv
 
 app = FastAPI()
 
 import os
 import google.generativeai as genai
+# Load environment variables from .env file
+load_dotenv()
 
-apiKey="AIzaSyApvWH5jct2jiyWwua2dqcSwHY5oJ9yn2c"
+# Get the API key from environment variables
+apiKey = os.getenv("API_KEY")
+if not apiKey:
+    raise ValueError("API key is missing. Please set API_KEY in your .env file.")
+
 genai.configure(api_key=apiKey)
 
 # Create the model
