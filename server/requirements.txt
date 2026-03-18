@@ -2,7 +2,8 @@ fastapi
 uvicorn
 python-dotenv
 google-generativeai
-pyttsx3
 pypiwin32  # Needed for pyttsx3 on Windows
 gtts  # Alternative TTS engine (optional)
 pydantic
+google-cloud-texttospeech
+requests

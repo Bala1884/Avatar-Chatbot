@@ -1,47 +1,16 @@
-import json
-import os
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 from fastapi.responses import FileResponse
-import pyttsx3
 from fastapi.middleware.cors import CORSMiddleware
-import re
-from dotenv import load_dotenv
+from pydantic import BaseModel
+import os
+
+from agents import safety_agent, main_agent, cleanup_agent
+from agents.main_agent import clear_history
+from tts import text_to_speech, get_wav_duration, generate_mouth_cues, clean_text
 
 app = FastAPI()
 
-import os
-import google.generativeai as genai
-# Load environment variables from .env file
-load_dotenv()
-
-# Get the API key from environment variables
-apiKey = os.getenv("API_KEY")
-if not apiKey:
-    raise ValueError("API key is missing. Please set API_KEY in your .env file.")
-
-genai.configure(api_key=apiKey)
-
-# Create the model
-generation_config = {
-  "temperature": 1,
-  "top_p": 0.95,
-  "top_k": 40,
-  "max_output_tokens": 50,
-  "response_mime_type": "text/plain",
-}
-
-model = genai.GenerativeModel(
-  model_name="gemini-2.0-flash-exp",
-  generation_config=generation_config,
-)
-
-chat_session = model.start_chat(history=[])
-
-
-
-
-
+# ── CORS ──────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -50,102 +19,90 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load the definitions from the JSON file
-# def load_definitions():
-#     try:
-#         with open("D:/Bala/Avatar chatbot/Avatar project/public/definitions.json", "r") as file:
-#             data = json.load(file)
-#         return data["definitions"]
-#     except FileNotFoundError:
-#         raise HTTPException(status_code=404, detail="Definitions file not found.")
 
+# ═════════════════════════════════════════════════════════════
+#  PIPELINE
+#  Safety → Main → Cleanup → TTS → MouthCues
+# ═════════════════════════════════════════════════════════════
+def run_pipeline(question: str, voice: str = "male"):
+    """
+    Runs the full 3-agent pipeline and returns
+    (answer_text, audio_filename, mouth_cues).
+    """
 
-
-def clean_response(text):
-    text = text.strip()
-    text = text.replace("\n", " ")  # Replace newlines with spaces
-    text = re.sub(r"\*\*", "", text)  # Remove **bold text**
-    text = re.sub(r"\*", "", text)  # Remove * bullet points
-    text = re.sub(r"_", "", text)  # Remove underscores (if any)
-    return text
-
-# Function to find an answer from the JSON file and get lipsync data
-def get_response_and_lipsync(question):
-    # definitions = load_definitions()
-    # for entry in definitions:
-    #     if question.lower() in entry["question"].lower():
-    #         # Return answer and mouthCues data
-    #         return entry["answer"], entry.get("mouthCues", [])
-    # return None, None
-    print(question)  # Debugging
-
+    # ── Agent 1: Safety ──────────────────────────────────────
     try:
-        response = chat_session.send_message(question)
-        cleaned_response = clean_response(response.text)
-        print("Cleaned Response from API:", cleaned_response)  # Debugging
-        return cleaned_response, None
-    except Exception as e:
-        print(f"Error in API call: {e}")
-        return "I'm sorry, something went wrong.", None
+        is_safe = safety_agent(question)
+    except RuntimeError as e:
+        return str(e), None, None
+
+    if not is_safe:
+        blocked_msg = "I'm sorry, I can't help with that. Please ask me something else."
+        audio_file  = text_to_speech(blocked_msg, voice)
+        duration    = get_wav_duration(audio_file)
+        cues        = generate_mouth_cues(blocked_msg, duration)
+        return blocked_msg, audio_file, cues
+
+    # ── Agent 2: Main response ────────────────────────────────
+    try:
+        raw_response = main_agent(question)
+    except RuntimeError as e:
+        return str(e), None, None
+
+    # ── Agent 3: Cleanup ──────────────────────────────────────
+    try:
+        cleaned = cleanup_agent(raw_response)
+    except RuntimeError:
+        cleaned = clean_text(raw_response)   # fallback to regex
+
+    final_text = clean_text(cleaned)
+
+    # ── TTS ───────────────────────────────────────────────────
+    try:
+        audio_file = text_to_speech(final_text, voice)
+    except RuntimeError as e:
+        print(f"[TTS Error] {e}")
+        return final_text, None, None
+
+    # ── Mouth cues ────────────────────────────────────────────
+    duration   = get_wav_duration(audio_file)
+    mouth_cues = generate_mouth_cues(final_text, duration)
+
+    return final_text, audio_file, mouth_cues
 
 
-
-
-# Text-to-speech conversion using pyttsx3
-def text_to_speech(text):
-    engine = pyttsx3.init()
-
-    # Set properties for the speech engine
-    engine.setProperty('rate', 150)
-    engine.setProperty('volume', 1.0)
-
-    # Select voice for Indian English
-    voices = engine.getProperty('voices')
-    for voice in voices:
-        if "Indian" in voice.name:
-            engine.setProperty('voice', voice.id)
-            break
-
-    # Save speech to an audio file
-    audio_file = "response.ogg"
-    engine.save_to_file(text, audio_file)
-    engine.runAndWait()
-
-    return audio_file
-
-# Request model for user input
+# ═════════════════════════════════════════════════════════════
+#  ROUTES
+# ═════════════════════════════════════════════════════════════
 class VoiceRequest(BaseModel):
     message: str
+    voice:   str = "male"   # "male" | "female" | "indian"
 
-# POST endpoint to handle voice interactions
+
 @app.post("/voice-chat")
 async def voice_chat(request: VoiceRequest):
-    user_message = request.message
+    answer, audio_file, mouth_cues = run_pipeline(request.message, request.voice)
 
-    # Find answer and mouthCues data in the JSON file
-    answer, mouthCues = get_response_and_lipsync(user_message)
-    
-    # If no answer is found, provide a fallback response
-    if answer is None:
+    if not answer:
         answer = "I'm sorry, I couldn't find an answer to your question."
 
-    # Convert the answer to speech
-    audio_file = text_to_speech(answer)
-
-    # Return the audio file URL and mouthCues data
     return {
-        "audio_url": f"http://localhost:8000/audio/{audio_file}",
-        "mouthCues": mouthCues,
-        "confidence": None,  # You can add confidence score logic here if needed
+        "audio_url":  f"http://localhost:8000/audio/{audio_file}" if audio_file else None,
+        "mouthCues":  mouth_cues,
+        "confidence": None,
     }
 
-# GET endpoint to retrieve the audio file
+
 @app.get("/audio/{filename}")
 async def get_audio(filename: str):
     file_path = f"./{filename}"
-
-    # Check if the file exists
     if os.path.exists(file_path):
-        return FileResponse(file_path, media_type="audio/ogg")  # Changed to audio/ogg to match the saved format
-    else:
-        raise HTTPException(status_code=404, detail="File not found.")
+        return FileResponse(file_path, media_type="audio/wav")
+    raise HTTPException(status_code=404, detail="File not found.")
+
+
+@app.post("/clear-history")
+async def clear_chat_history():
+    """Clears the conversation memory — useful for starting a new session."""
+    clear_history()
+    return {"status": "Chat history cleared."}
