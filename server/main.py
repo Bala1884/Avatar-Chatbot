@@ -2,7 +2,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from dotenv import load_dotenv
 import os
+
+load_dotenv()  # loads GROQ_API_KEY from .env
 
 from agents import safety_agent, main_agent, cleanup_agent
 from agents.main_agent import clear_history
@@ -21,16 +24,10 @@ app.add_middleware(
 
 
 # ═════════════════════════════════════════════════════════════
-#  PIPELINE
-#  Safety → Main → Cleanup → TTS → MouthCues
+#  PIPELINE — Safety → Main → Cleanup → TTS → MouthCues
 # ═════════════════════════════════════════════════════════════
 def run_pipeline(question: str, voice: str = "male"):
-    """
-    Runs the full 3-agent pipeline and returns
-    (answer_text, audio_filename, mouth_cues).
-    """
-
-    # ── Agent 1: Safety ──────────────────────────────────────
+    # Agent 1: Safety
     try:
         is_safe = safety_agent(question)
     except RuntimeError as e:
@@ -43,28 +40,28 @@ def run_pipeline(question: str, voice: str = "male"):
         cues        = generate_mouth_cues(blocked_msg, duration)
         return blocked_msg, audio_file, cues
 
-    # ── Agent 2: Main response ────────────────────────────────
+    # Agent 2: Main response
     try:
         raw_response = main_agent(question)
     except RuntimeError as e:
         return str(e), None, None
 
-    # ── Agent 3: Cleanup ──────────────────────────────────────
+    # Agent 3: Cleanup
     try:
         cleaned = cleanup_agent(raw_response)
     except RuntimeError:
-        cleaned = clean_text(raw_response)   # fallback to regex
+        cleaned = clean_text(raw_response)
 
     final_text = clean_text(cleaned)
 
-    # ── TTS ───────────────────────────────────────────────────
+    # TTS
     try:
         audio_file = text_to_speech(final_text, voice)
     except RuntimeError as e:
         print(f"[TTS Error] {e}")
         return final_text, None, None
 
-    # ── Mouth cues ────────────────────────────────────────────
+    # Mouth cues
     duration   = get_wav_duration(audio_file)
     mouth_cues = generate_mouth_cues(final_text, duration)
 
@@ -103,6 +100,5 @@ async def get_audio(filename: str):
 
 @app.post("/clear-history")
 async def clear_chat_history():
-    """Clears the conversation memory — useful for starting a new session."""
     clear_history()
     return {"status": "Chat history cleared."}

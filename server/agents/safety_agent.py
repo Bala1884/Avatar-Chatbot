@@ -1,47 +1,43 @@
-import requests
+import os
+from groq import Groq
 
-OLLAMA_URL  = "http://localhost:11434/api/chat"
-AGENT_MODEL = "gemma2:2b"
+SAFETY_MODEL = "llama-3.1-8b-instant"   # fast, cheap, enough for SAFE/UNSAFE
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 
 def safety_agent(user_message: str) -> bool:
     """
-    Agent 1 — Safety Check (gemma2:2b)
+    Agent 1 — Safety Check (llama-3.1-8b-instant via Groq)
     Returns True if message is safe, False if it should be blocked.
     """
     print(f"[Safety Agent] Checking: {user_message}")
 
-    system = (
-        "You are a content safety classifier. "
-        "Reply with exactly one word: SAFE or UNSAFE. "
-        "Mark UNSAFE if the message asks for: violence, self-harm, illegal activities, "
-        "explicit sexual content, hate speech, or personal private data of others. "
-        "Mark SAFE for everything else including general questions, professional topics, "
-        "casual conversation, opinions, facts, and any normal topic. "
-        "Do not explain. Output only: SAFE or UNSAFE."
-    )
-
     try:
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": AGENT_MODEL,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user",   "content": user_message},
-                ],
-                "stream": False,
-                "options": {"temperature": 0.1, "num_predict": 5},
-            },
-            timeout=30,
+        response = client.chat.completions.create(
+            model=SAFETY_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a content safety classifier. "
+                        "Reply with exactly one word: SAFE or UNSAFE. "
+                        "Mark UNSAFE if the message asks for: violence, self-harm, illegal activities, "
+                        "explicit sexual content, hate speech, or personal private data of others. "
+                        "Mark SAFE for everything else including general questions, professional topics, "
+                        "casual conversation, opinions, facts, and any normal topic. "
+                        "Do not explain. Output only: SAFE or UNSAFE."
+                    )
+                },
+                {"role": "user", "content": user_message}
+            ],
+            max_tokens=5,
+            temperature=0.1,
         )
-        response.raise_for_status()
-        result = response.json()["message"]["content"].strip()
+        result  = response.choices[0].message.content.strip()
         is_safe = "SAFE" in result.upper() and "UNSAFE" not in result.upper()
         print(f"[Safety Agent] Result: {result} → {'PASS' if is_safe else 'BLOCK'}")
         return is_safe
 
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError("Ollama is not running. Start it with: ollama serve")
     except Exception as e:
-        raise RuntimeError(f"Safety agent failed: {e}")
+        print(f"[Safety Agent] Error: {e}")
+        return True  # fail open
